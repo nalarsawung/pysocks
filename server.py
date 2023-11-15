@@ -3,17 +3,18 @@ import select
 import socket
 import struct
 from socketserver import ThreadingMixIn, TCPServer, StreamRequestHandler
-import socks  # Gunakan library PySocks
 
 logging.basicConfig(level=logging.DEBUG)
 SOCKS_VERSION = 5
 
+
 class ThreadingTCPServer(ThreadingMixIn, TCPServer):
     pass
 
+
 class SocksProxy(StreamRequestHandler):
-    username = 'puki'
-    password = 'puki'
+    username = 'username'
+    password = 'password'
 
     def handle(self):
         logging.info('Accepting connection from %s:%s' % self.client_address)
@@ -31,12 +32,10 @@ class SocksProxy(StreamRequestHandler):
         methods = self.get_available_methods(nmethods)
 
         # accept only USERNAME/PASSWORD auth
-
         if 2 not in set(methods):
             # close connection
             self.server.close_request(self.request)
             return
-
 
         # send welcome message
         self.connection.sendall(struct.pack("!BB", SOCKS_VERSION, 2))
@@ -47,7 +46,7 @@ class SocksProxy(StreamRequestHandler):
         # request
         version, cmd, _, address_type = struct.unpack("!BBBB", self.connection.recv(4))
         assert version == SOCKS_VERSION
-        
+
         if address_type == 1:  # IPv4
             address = socket.inet_ntoa(self.connection.recv(4))
         elif address_type == 3:  # Domain name
@@ -55,15 +54,14 @@ class SocksProxy(StreamRequestHandler):
             address = self.connection.recv(domain_length)
             address = socket.gethostbyname(address)
         port = struct.unpack('!H', self.connection.recv(2))[0]
+
+        # reply
         try:
             if cmd == 1:  # CONNECT
-                # remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                # set socks you want to forward
-                remote = socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
-                # remote.set_proxy(socks.PROXY_TYPE_SOCKS5, "127.0.0.1", 8080)
+                remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 remote.connect((address, port))
                 bind_address = remote.getsockname()
-                logging.info('Connected to %s:%s' % (address, port))
+                logging.info('Connected to %s %s' % (address, port))
             else:
                 self.server.close_request(self.request)
 
@@ -76,11 +74,13 @@ class SocksProxy(StreamRequestHandler):
             logging.error(err)
             # return connection refused error
             reply = self.generate_failed_reply(address_type, 5)
-        
+
         self.connection.sendall(reply)
+
         # establish data exchange
         if reply[1] == 0 and cmd == 1:
             self.exchange_loop(self.connection, remote)
+
         self.server.close_request(self.request)
 
     def get_available_methods(self, n):
@@ -90,7 +90,6 @@ class SocksProxy(StreamRequestHandler):
         return methods
 
     def verify_credentials(self):
-        
         version = ord(self.connection.recv(1))
         assert version == 1
 
@@ -116,18 +115,22 @@ class SocksProxy(StreamRequestHandler):
         return struct.pack("!BBBBIH", SOCKS_VERSION, error_number, 0, address_type, 0, 0)
 
     def exchange_loop(self, client, remote):
+
         while True:
+
             # wait until client or remote is available for read
             r, w, e = select.select([client, remote], [], [])
+
             if client in r:
-                data = client.recv(1024)
+                data = client.recv(4096)
                 if remote.send(data) <= 0:
                     break
 
             if remote in r:
-                data = remote.recv(1024)
+                data = remote.recv(4096)
                 if client.send(data) <= 0:
                     break
+
 
 if __name__ == '__main__':
     with ThreadingTCPServer(('127.0.0.1', 1080), SocksProxy) as server:
